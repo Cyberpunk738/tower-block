@@ -1,4 +1,4 @@
-# 🏙️ Tower Block
+# 🏙️ Tower Block.
 
 An interactive 3D block-stacking browser game built with **Three.js** and **GSAP (TweenMax)**. Test your precision and timing as you stack blocks to build the tallest tower possible!
 
