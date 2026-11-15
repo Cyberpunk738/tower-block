@@ -24,7 +24,7 @@ With Node.js 18 or later:
 node --test tests/*.test.js
 ```
 
-The tests exercise placement, misses, boundary reflection, and frame-rate-independent motion. Browser and device testing is still recommended when changing rendering or controls.
+The tests exercise placement, misses, boundary reflection, frame-rate-independent motion, modes, input handling and pause/timer state using a simulated DOM and renderer. Browser and device testing is still recommended when changing rendering or controls.
 
 ## Attribution and rights
 
