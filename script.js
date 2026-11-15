@@ -1,298 +1,108 @@
-"use strict";
-console.clear();
-class Stage {
-    constructor() {
-        // container
-        this.render = function () {
-            this.renderer.render(this.scene, this.camera);
-        };
-        this.add = function (elem) {
-            this.scene.add(elem);
-        };
-        this.remove = function (elem) {
-            this.scene.remove(elem);
-        };
-        this.container = document.getElementById('game');
-        // renderer
-        this.renderer = new THREE.WebGLRenderer({
-            antialias: true,
-            alpha: false
-        });
-        this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setClearColor('#D0CBC7', 1);
-        this.container.appendChild(this.renderer.domElement);
-        // scene
-        this.scene = new THREE.Scene();
-        // camera
-        let aspect = window.innerWidth / window.innerHeight;
-        let d = 20;
-        this.camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, -100, 1000);
-        this.camera.position.x = 2;
-        this.camera.position.y = 2;
-        this.camera.position.z = 2;
-        this.camera.lookAt(new THREE.Vector3(0, 0, 0));
-        //light
-        this.light = new THREE.DirectionalLight(0xffffff, 0.5);
-        this.light.position.set(0, 499, 0);
-        this.scene.add(this.light);
-        this.softLight = new THREE.AmbientLight(0xffffff, 0.4);
-        this.scene.add(this.softLight);
-        window.addEventListener('resize', () => this.onResize());
-        this.onResize();
+(function () {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  if (!window.THREE || !window.TowerLogic) { $('error').hidden = false; return; }
+  const Logic = window.TowerLogic;
+  const modes = { classic: 'Classic', zen: 'Zen', timed: 'Time attack' };
+  const settingsKey = 'tower-block-settings-v1';
+  const scoresKey = 'tower-block-scores-v1';
+  function read(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch (_) { return fallback; } }
+  function write(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) { /* Game remains playable without storage. */ } }
+  let settings = read(settingsKey, {}), bests = read(scoresKey, {});
+  let soundEnabled = settings.sound === true, audio;
+  const soundButton = $('sound');
+  function syncSound() { soundButton.setAttribute('aria-pressed', String(soundEnabled)); soundButton.querySelector('span').textContent = soundEnabled ? 'Sound on' : 'Sound off'; }
+  function beep(perfect) {
+    if (!soundEnabled) return;
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      audio = audio || new AudioContext();
+      if (audio.state === 'suspended') audio.resume();
+      const oscillator = audio.createOscillator(), gain = audio.createGain();
+      oscillator.type = 'sine'; oscillator.frequency.value = perfect ? 660 : 330;
+      gain.gain.setValueAtTime(0.045, audio.currentTime); gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.15);
+      oscillator.connect(gain); gain.connect(audio.destination); oscillator.start(); oscillator.stop(audio.currentTime + 0.15);
+    } catch (_) { /* Audio is optional. */ }
+  }
+  soundButton.addEventListener('click', () => { soundEnabled = !soundEnabled; settings.sound = soundEnabled; write(settingsKey, settings); syncSound(); }); syncSound();
+  let renderer;
+  try { renderer = new THREE.WebGLRenderer({ antialias: true }); } catch (_) { $('error').hidden = false; return; }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); renderer.setClearColor(0x111a30); $('game').appendChild(renderer.domElement);
+  const scene = new THREE.Scene(); scene.fog = new THREE.Fog(0x111a30, 40, 120);
+  const camera = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 200);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.72));
+  const light = new THREE.DirectionalLight(0xffffff, 0.75); light.position.set(8, 18, 12); scene.add(light);
+  const tower = new THREE.Group(), debris = new THREE.Group(), scenery = new THREE.Group(); scene.add(tower); scene.add(debris); scene.add(scenery);
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(90, 0.5, 90), new THREE.MeshLambertMaterial({ color: 0x16243b })); floor.position.y = -0.8; scenery.add(floor);
+  // Decorative skyline is deliberately deterministic and does not affect play.
+  for (let i = 0; i < 50; i++) { const h = 1 + ((i * 17) % 11) * 0.35; const building = new THREE.Mesh(new THREE.BoxGeometry(1.3, h, 1.3), new THREE.MeshLambertMaterial({ color: i % 3 ? 0x25344b : 0x314059 })); const a = i * 2.39996, radius = 11 + (i % 6) * 2; building.position.set(Math.cos(a) * radius, h / 2 - 0.5, Math.sin(a) * radius); scenery.add(building); }
+  function resize() { const aspect = innerWidth / Math.max(1, innerHeight), view = innerWidth < 700 ? 15 : 12; camera.left = -view * aspect; camera.right = view * aspect; camera.top = view; camera.bottom = -view; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); }
+  addEventListener('resize', resize); resize();
+  function dispose(mesh) { if (mesh.geometry) mesh.geometry.dispose(); if (mesh.material) mesh.material.dispose(); }
+  function clear(group) { while (group.children.length) { const child = group.children[0]; group.remove(child); dispose(child); } }
+  function meshFor(block, color) { const mesh = new THREE.Mesh(new THREE.BoxGeometry(block.w, 0.8, block.d), new THREE.MeshLambertMaterial({ color: color })); mesh.position.set(block.x, block.y, block.z); return mesh; }
+  function blockColor(n) { const color = new THREE.Color(); color.setHSL((0.47 + n * 0.033) % 1, 0.62, 0.62); return color; }
+  let mode = 'classic', state = 'menu', blocks = [], active = null, score = 0, streak = 0, bestStreak = 0, timeLeft = 60, cameraY = 0, last = 0, feedbackUntil = 0;
+  function setMode(value) { mode = value; document.querySelectorAll('.mode').forEach(button => { const selected = button.dataset.mode === mode; button.classList.toggle('selected', selected); button.setAttribute('aria-pressed', String(selected)); }); }
+  document.querySelectorAll('.mode').forEach(button => button.addEventListener('click', () => setMode(button.dataset.mode)));
+  function updateHud() { $('score').textContent = score; $('best').textContent = bests[mode] || 0; $('metric-label').textContent = mode === 'timed' ? 'TIME' : 'STREAK'; $('metric').textContent = mode === 'timed' ? Math.ceil(timeLeft) + 's' : streak; }
+  function showFeedback(text) { $('feedback').textContent = text; feedbackUntil = performance.now() + 900; }
+  function spawn() {
+    const previous = blocks[blocks.length - 1], axis = score % 2 ? 'z' : 'x';
+    active = { x: previous.x, z: previous.z, y: previous.y + 0.8, w: previous.w, d: previous.d, axis: axis, direction: 1, color: blockColor(score + 1) };
+    active[axis] = previous[axis] - 9; active.mesh = meshFor(active, active.color); tower.add(active.mesh);
+  }
+  function reset() {
+    clear(tower); clear(debris); blocks = []; score = 0; streak = 0; bestStreak = 0; timeLeft = 60; cameraY = 1;
+    const base = { x: 0, y: 0, z: 0, w: 5, d: 5 }; blocks.push(base); tower.add(meshFor(base, 0xcfff62)); spawn(); updateHud();
+  }
+  function start() { reset(); state = 'playing'; last = 0; $('menu').hidden = true; $('results').hidden = true; $('paused').hidden = true; $('hud').hidden = false; $('pause').hidden = false; $('hint').hidden = false; $('feedback').textContent = ''; $('pause').focus(); }
+  function end(reason) {
+    if (state !== 'playing') return; state = 'ended'; $('pause').hidden = true; $('hint').hidden = true;
+    const previousBest = Number(bests[mode]) || 0, newBest = score > previousBest; if (newBest) { bests[mode] = score; write(scoresKey, bests); }
+    updateHud(); $('result-title').textContent = newBest ? 'A new personal best.' : 'Nice building.';
+    $('result-detail').textContent = (reason === 'time' ? 'Time is up. ' : 'Your tower reached ' + score + (score === 1 ? ' floor. ' : ' floors. ')) + modes[mode] + ' mode';
+    $('final-score').textContent = score; $('final-streak').textContent = bestStreak; $('final-best').textContent = bests[mode] || 0; $('results').hidden = false; $('again').focus();
+  }
+  function pause() { if (state !== 'playing') return; state = 'paused'; $('paused').hidden = false; $('resume').focus(); }
+  function resume() { if (state !== 'paused') return; state = 'playing'; last = 0; $('paused').hidden = true; $('pause').focus(); }
+  function menu() { state = 'menu'; clear(tower); clear(debris); $('paused').hidden = true; $('results').hidden = true; $('hud').hidden = true; $('pause').hidden = true; $('hint').hidden = true; $('feedback').textContent = ''; $('menu').hidden = false; cameraY = 1; reset(); $('start').focus(); }
+  function place() {
+    if (state !== 'playing' || !active) return;
+    const previous = blocks[blocks.length - 1], axis = active.axis, sizeKey = axis === 'x' ? 'w' : 'd';
+    const result = Logic.intersect(previous[axis], active[axis], previous[sizeKey], Math.min(0.13, previous[sizeKey] * 0.15));
+    if (result.kind === 'miss') {
+      streak = 0; beep(false);
+      if (mode === 'zen') { active[axis] = previous[axis] - 9; active.direction = 1; active.mesh.position[axis] = active[axis]; showFeedback('Take another shot'); updateHud(); return; }
+      end('miss'); return;
     }
-    setCamera(y, speed = 0.3) {
-        TweenLite.to(this.camera.position, speed, { y: y + 4, ease: Power1.easeInOut });
-        TweenLite.to(this.camera.lookAt, speed, { y: y, ease: Power1.easeInOut });
+    tower.remove(active.mesh); dispose(active.mesh);
+    const oldSize = active[sizeKey]; active[axis] = result.center; active[sizeKey] = result.size;
+    const placed = { x: active.x, y: active.y, z: active.z, w: active.w, d: active.d }; blocks.push(placed); tower.add(meshFor(placed, active.color));
+    if (result.kind === 'placed') { const cut = { x: active.x, y: active.y, z: active.z, w: active.w, d: active.d }; cut[axis] = result.offcutCenter; cut[sizeKey] = oldSize - result.size; const piece = meshFor(cut, active.color); piece.userData.velocity = 0; piece.userData.spin = Math.sign(result.offcutCenter - previous[axis]) * 1.3; debris.add(piece); streak = 0; }
+    else { streak++; bestStreak = Math.max(bestStreak, streak); showFeedback(streak > 1 ? 'PERFECT × ' + streak : 'PERFECT'); }
+    beep(result.kind === 'perfect'); score++; updateHud(); if (score >= 3) $('hint').hidden = true; spawn();
+  }
+  $('start').addEventListener('click', start); $('again').addEventListener('click', start); $('pause').addEventListener('click', pause); $('resume').addEventListener('click', resume); document.querySelectorAll('.menu-return').forEach(button => button.addEventListener('click', menu));
+  $('game').addEventListener('pointerdown', event => { if (event.button === 0) place(); });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { if (state === 'playing') pause(); else if (state === 'paused') resume(); return; }
+    if (event.code === 'Space' && state === 'playing' && !event.repeat) { event.preventDefault(); place(); }
+  });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'playing') pause(); });
+  renderer.domElement.addEventListener('webglcontextlost', event => { event.preventDefault(); if (state === 'playing') pause(); $('error').hidden = false; });
+  renderer.domElement.addEventListener('webglcontextrestored', () => { $('error').hidden = true; });
+  function frame(now) {
+    requestAnimationFrame(frame); const elapsed = last ? Math.max(0, (now - last) / 1000) : 0; const dt = Math.min(elapsed, 0.05); last = now;
+    if (state === 'playing') {
+      if (mode === 'timed') { timeLeft = Math.max(0, timeLeft - elapsed); updateHud(); if (timeLeft <= 0) end('time'); }
+      if (state === 'playing' && active) { const target = blocks[blocks.length - 1][active.axis]; const motion = Logic.advance(active[active.axis], active.direction, Math.min(11, 3.2 + score * 0.12), dt, target - 9, target + 9); active[active.axis] = motion.position; active.direction = motion.direction; active.mesh.position[active.axis] = motion.position; }
+      for (let i = debris.children.length - 1; i >= 0; i--) { const piece = debris.children[i]; piece.userData.velocity += 14 * dt; piece.position.y -= piece.userData.velocity * dt; piece.rotation.z += piece.userData.spin * dt; if (piece.position.y < cameraY - 25) { debris.remove(piece); dispose(piece); } }
     }
-    onResize() {
-        let viewSize = 30;
-        this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.camera.left = window.innerWidth / -viewSize;
-        this.camera.right = window.innerWidth / viewSize;
-        this.camera.top = window.innerHeight / viewSize;
-        this.camera.bottom = window.innerHeight / -viewSize;
-        this.camera.updateProjectionMatrix();
-    }
-}
-class Block {
-    constructor(block) {
-        // set size and position
-        this.STATES = { ACTIVE: 'active', STOPPED: 'stopped', MISSED: 'missed' };
-        this.MOVE_AMOUNT = 12;
-        this.dimension = { width: 0, height: 0, depth: 0 };
-        this.position = { x: 0, y: 0, z: 0 };
-        this.targetBlock = block;
-        this.index = (this.targetBlock ? this.targetBlock.index : 0) + 1;
-        this.workingPlane = this.index % 2 ? 'x' : 'z';
-        this.workingDimension = this.index % 2 ? 'width' : 'depth';
-        // set the dimensions from the target block, or defaults.
-        this.dimension.width = this.targetBlock ? this.targetBlock.dimension.width : 10;
-        this.dimension.height = this.targetBlock ? this.targetBlock.dimension.height : 2;
-        this.dimension.depth = this.targetBlock ? this.targetBlock.dimension.depth : 10;
-        this.position.x = this.targetBlock ? this.targetBlock.position.x : 0;
-        this.position.y = this.dimension.height * this.index;
-        this.position.z = this.targetBlock ? this.targetBlock.position.z : 0;
-        this.colorOffset = this.targetBlock ? this.targetBlock.colorOffset : Math.round(Math.random() * 100);
-        // set color
-        if (!this.targetBlock) {
-            this.color = 0x333344;
-        }
-        else {
-            let offset = this.index + this.colorOffset;
-            var r = Math.sin(0.3 * offset) * 55 + 200;
-            var g = Math.sin(0.3 * offset + 2) * 55 + 200;
-            var b = Math.sin(0.3 * offset + 4) * 55 + 200;
-            this.color = new THREE.Color(r / 255, g / 255, b / 255);
-        }
-        // state
-        this.state = this.index > 1 ? this.STATES.ACTIVE : this.STATES.STOPPED;
-        // set direction
-        this.speed = -0.1 - (this.index * 0.005);
-        if (this.speed < -4)
-            this.speed = -4;
-        this.direction = this.speed;
-        // create block
-        let geometry = new THREE.BoxGeometry(this.dimension.width, this.dimension.height, this.dimension.depth);
-        geometry.applyMatrix(new THREE.Matrix4().makeTranslation(this.dimension.width / 2, this.dimension.height / 2, this.dimension.depth / 2));
-        this.material = new THREE.MeshToonMaterial({ color: this.color, shading: THREE.FlatShading });
-        this.mesh = new THREE.Mesh(geometry, this.material);
-        this.mesh.position.set(this.position.x, this.position.y + (this.state == this.STATES.ACTIVE ? 0 : 0), this.position.z);
-        if (this.state == this.STATES.ACTIVE) {
-            this.position[this.workingPlane] = Math.random() > 0.5 ? -this.MOVE_AMOUNT : this.MOVE_AMOUNT;
-        }
-    }
-    reverseDirection() {
-        this.direction = this.direction > 0 ? this.speed : Math.abs(this.speed);
-    }
-    place() {
-        this.state = this.STATES.STOPPED;
-        let overlap = this.targetBlock.dimension[this.workingDimension] - Math.abs(this.position[this.workingPlane] - this.targetBlock.position[this.workingPlane]);
-        let blocksToReturn = {
-            plane: this.workingPlane,
-            direction: this.direction
-        };
-        if (this.dimension[this.workingDimension] - overlap < 0.3) {
-            overlap = this.dimension[this.workingDimension];
-            blocksToReturn.bonus = true;
-            this.position.x = this.targetBlock.position.x;
-            this.position.z = this.targetBlock.position.z;
-            this.dimension.width = this.targetBlock.dimension.width;
-            this.dimension.depth = this.targetBlock.dimension.depth;
-        }
-        if (overlap > 0) {
-            let choppedDimensions = { width: this.dimension.width, height: this.dimension.height, depth: this.dimension.depth };
-            choppedDimensions[this.workingDimension] -= overlap;
-            this.dimension[this.workingDimension] = overlap;
-            let placedGeometry = new THREE.BoxGeometry(this.dimension.width, this.dimension.height, this.dimension.depth);
-            placedGeometry.applyMatrix(new THREE.Matrix4().makeTranslation(this.dimension.width / 2, this.dimension.height / 2, this.dimension.depth / 2));
-            let placedMesh = new THREE.Mesh(placedGeometry, this.material);
-            let choppedGeometry = new THREE.BoxGeometry(choppedDimensions.width, choppedDimensions.height, choppedDimensions.depth);
-            choppedGeometry.applyMatrix(new THREE.Matrix4().makeTranslation(choppedDimensions.width / 2, choppedDimensions.height / 2, choppedDimensions.depth / 2));
-            let choppedMesh = new THREE.Mesh(choppedGeometry, this.material);
-            let choppedPosition = {
-                x: this.position.x,
-                y: this.position.y,
-                z: this.position.z
-            };
-            if (this.position[this.workingPlane] < this.targetBlock.position[this.workingPlane]) {
-                this.position[this.workingPlane] = this.targetBlock.position[this.workingPlane];
-            }
-            else {
-                choppedPosition[this.workingPlane] += overlap;
-            }
-            placedMesh.position.set(this.position.x, this.position.y, this.position.z);
-            choppedMesh.position.set(choppedPosition.x, choppedPosition.y, choppedPosition.z);
-            blocksToReturn.placed = placedMesh;
-            if (!blocksToReturn.bonus)
-                blocksToReturn.chopped = choppedMesh;
-        }
-        else {
-            this.state = this.STATES.MISSED;
-        }
-        this.dimension[this.workingDimension] = overlap;
-        return blocksToReturn;
-    }
-    tick() {
-        if (this.state == this.STATES.ACTIVE) {
-            let value = this.position[this.workingPlane];
-            if (value > this.MOVE_AMOUNT || value < -this.MOVE_AMOUNT)
-                this.reverseDirection();
-            this.position[this.workingPlane] += this.direction;
-            this.mesh.position[this.workingPlane] = this.position[this.workingPlane];
-        }
-    }
-}
-class Game {
-    constructor() {
-        this.STATES = {
-            'LOADING': 'loading',
-            'PLAYING': 'playing',
-            'READY': 'ready',
-            'ENDED': 'ended',
-            'RESETTING': 'resetting'
-        };
-        this.blocks = [];
-        this.state = this.STATES.LOADING;
-        this.stage = new Stage();
-        this.mainContainer = document.getElementById('container');
-        this.scoreContainer = document.getElementById('score');
-        this.startButton = document.getElementById('start-button');
-        this.instructions = document.getElementById('instructions');
-        this.scoreContainer.innerHTML = '0';
-        this.newBlocks = new THREE.Group();
-        this.placedBlocks = new THREE.Group();
-        this.choppedBlocks = new THREE.Group();
-        this.stage.add(this.newBlocks);
-        this.stage.add(this.placedBlocks);
-        this.stage.add(this.choppedBlocks);
-        this.addBlock();
-        this.tick();
-        this.updateState(this.STATES.READY);
-        document.addEventListener('keydown', e => {
-            if (e.keyCode == 32)
-                this.onAction();
-        });
-        document.addEventListener('click', e => {
-            this.onAction();
-        });
-        document.addEventListener('touchstart', e => {
-            e.preventDefault();
-            // this.onAction();
-            // ☝️ this triggers after click on android so you
-            // insta-lose, will figure it out later.
-        });
-    }
-    updateState(newState) {
-        for (let key in this.STATES)
-            this.mainContainer.classList.remove(this.STATES[key]);
-        this.mainContainer.classList.add(newState);
-        this.state = newState;
-    }
-    onAction() {
-        switch (this.state) {
-            case this.STATES.READY:
-                this.startGame();
-                break;
-            case this.STATES.PLAYING:
-                this.placeBlock();
-                break;
-            case this.STATES.ENDED:
-                this.restartGame();
-                break;
-        }
-    }
-    startGame() {
-        if (this.state != this.STATES.PLAYING) {
-            this.scoreContainer.innerHTML = '0';
-            this.updateState(this.STATES.PLAYING);
-            this.addBlock();
-        }
-    }
-    restartGame() {
-        this.updateState(this.STATES.RESETTING);
-        let oldBlocks = this.placedBlocks.children;
-        let removeSpeed = 0.2;
-        let delayAmount = 0.02;
-        for (let i = 0; i < oldBlocks.length; i++) {
-            TweenLite.to(oldBlocks[i].scale, removeSpeed, { x: 0, y: 0, z: 0, delay: (oldBlocks.length - i) * delayAmount, ease: Power1.easeIn, onComplete: () => this.placedBlocks.remove(oldBlocks[i]) });
-            TweenLite.to(oldBlocks[i].rotation, removeSpeed, { y: 0.5, delay: (oldBlocks.length - i) * delayAmount, ease: Power1.easeIn });
-        }
-        let cameraMoveSpeed = removeSpeed * 2 + (oldBlocks.length * delayAmount);
-        this.stage.setCamera(2, cameraMoveSpeed);
-        let countdown = { value: this.blocks.length - 1 };
-        TweenLite.to(countdown, cameraMoveSpeed, { value: 0, onUpdate: () => { this.scoreContainer.innerHTML = String(Math.round(countdown.value)); } });
-        this.blocks = this.blocks.slice(0, 1);
-        setTimeout(() => {
-            this.startGame();
-        }, cameraMoveSpeed * 1000);
-    }
-    placeBlock() {
-        let currentBlock = this.blocks[this.blocks.length - 1];
-        let newBlocks = currentBlock.place();
-        this.newBlocks.remove(currentBlock.mesh);
-        if (newBlocks.placed)
-            this.placedBlocks.add(newBlocks.placed);
-        if (newBlocks.chopped) {
-            this.choppedBlocks.add(newBlocks.chopped);
-            let positionParams = { y: '-=30', ease: Power1.easeIn, onComplete: () => this.choppedBlocks.remove(newBlocks.chopped) };
-            let rotateRandomness = 10;
-            let rotationParams = {
-                delay: 0.05,
-                x: newBlocks.plane == 'z' ? ((Math.random() * rotateRandomness) - (rotateRandomness / 2)) : 0.1,
-                z: newBlocks.plane == 'x' ? ((Math.random() * rotateRandomness) - (rotateRandomness / 2)) : 0.1,
-                y: Math.random() * 0.1,
-            };
-            if (newBlocks.chopped.position[newBlocks.plane] > newBlocks.placed.position[newBlocks.plane]) {
-                positionParams[newBlocks.plane] = '+=' + (40 * Math.abs(newBlocks.direction));
-            }
-            else {
-                positionParams[newBlocks.plane] = '-=' + (40 * Math.abs(newBlocks.direction));
-            }
-            TweenLite.to(newBlocks.chopped.position, 1, positionParams);
-            TweenLite.to(newBlocks.chopped.rotation, 1, rotationParams);
-        }
-        this.addBlock();
-    }
-    addBlock() {
-        let lastBlock = this.blocks[this.blocks.length - 1];
-        if (lastBlock && lastBlock.state == lastBlock.STATES.MISSED) {
-            return this.endGame();
-        }
-        this.scoreContainer.innerHTML = String(this.blocks.length - 1);
-        let newKidOnTheBlock = new Block(lastBlock);
-        this.newBlocks.add(newKidOnTheBlock.mesh);
-        this.blocks.push(newKidOnTheBlock);
-        this.stage.setCamera(this.blocks.length * 2);
-        if (this.blocks.length >= 5)
-            this.instructions.classList.add('hide');
-    }
-    endGame() {
-        this.updateState(this.STATES.ENDED);
-    }
-    tick() {
-        this.blocks[this.blocks.length - 1].tick();
-        this.stage.render();
-        requestAnimationFrame(() => { this.tick(); });
-    }
-}
-let game = new Game();
+    const targetY = state === 'menu' ? 2 : Math.max(2, (active ? active.y : 0) - 1); cameraY += (targetY - cameraY) * Math.min(1, dt * 3); camera.position.set(16, cameraY + 14, 16); camera.lookAt(new THREE.Vector3(0, cameraY, 0));
+    if (feedbackUntil && now > feedbackUntil) { $('feedback').textContent = ''; feedbackUntil = 0; }
+    renderer.render(scene, camera);
+  }
+  reset(); requestAnimationFrame(frame);
+})();

@@ -1,33 +1,11 @@
-<!DOCTYPE html>
-<html lang="en">
-
-<head>
-	<meta charset="UTF-8">
-	<title>Tower Blocks | </title>
-	<link rel="stylesheet" href="./style.css">
-</head>
-
-<body>
-	<meta name="viewport" content="width=device-width,user-scalable=no">
-
-	<div id="container">
-		<div id="game"></div>
-		<div id="score">0</div>
-		<div id="instructions">Click (or press the spacebar) to place the block</div>
-		<div class="game-over">
-			<h2>Game Over</h2>
-			<p>You did great, you're the best.</p>
-			<p>Click or spacebar to start again</p>
-		</div>
-		<div class="game-ready">
-			<div id="start-button">Start</div>
-			<div></div>
-		</div>
-	</div>
-	<script src='https://cdnjs.cloudflare.com/ajax/libs/three.js/r83/three.min.js'></script>
-	<script src='https://cdnjs.cloudflare.com/ajax/libs/gsap/latest/TweenMax.min.js'></script>
-	<script src="./script.js"></script>
-
-</body>
-
-</html>
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b1021"><title>Tower Block — Build higher</title><link rel="stylesheet" href="style.css"></head>
+<body><main id="app"><div id="game" aria-hidden="true"></div><div class="grain" aria-hidden="true"></div>
+<header><a class="brand" href="#" aria-label="Tower Block home"><span class="brand-icon">▥</span> TOWER<span>BLOCK</span></a><div class="header-actions"><button id="sound" class="icon-button" aria-label="Toggle sound" aria-pressed="false">♪ <span>Sound off</span></button><button id="pause" class="icon-button" hidden>Ⅱ <span>Pause</span></button></div></header>
+<section id="hud" class="hud" hidden aria-label="Game statistics"><div><small>FLOORS</small><strong id="score">0</strong></div><div><small>BEST</small><strong id="best">0</strong></div><div><small id="metric-label">STREAK</small><strong id="metric">0</strong></div></section>
+<div id="feedback" class="feedback" aria-live="polite"></div><div id="hint" class="hint" hidden>CLICK, TAP OR PRESS SPACE TO PLACE</div>
+<section id="menu" class="overlay"><div class="panel"><div class="eyebrow"><span></span> THE PRECISION ARCADE GAME</div><h1>How high can<br>you <em>build?</em></h1><p>One block at a time. Find your rhythm, land the perfect stack, and reach for the sky.</p><div class="mode-label">CHOOSE YOUR MODE</div><div class="modes" role="group" aria-label="Game mode"><button class="mode selected" data-mode="classic" aria-pressed="true"><b>Classic</b><span>One miss ends your run</span></button><button class="mode" data-mode="zen" aria-pressed="false"><b>Zen</b><span>Relax and keep building</span></button><button class="mode" data-mode="timed" aria-pressed="false"><b>Time attack</b><span>60 seconds to go big</span></button></div><button id="start" class="primary">Start building <span>↗</span></button><div class="instructions">SPACE / CLICK / TAP TO PLACE <span>·</span> ESC TO PAUSE</div></div><div class="side-note">A LITTLE HIGHER EVERY TIME <span>↗</span></div></section>
+<section id="paused" class="modal" hidden><div class="dialog"><div class="eyebrow">TAKE A BREATHER</div><h2>Game paused.</h2><p>Your tower is right where you left it.</p><button id="resume" class="primary">Resume game <span>↗</span></button><button class="text-button menu-return">Back to menu</button></div></section>
+<section id="results" class="modal" hidden><div class="dialog"><div class="eyebrow">RUN COMPLETE</div><h2 id="result-title">Nice building.</h2><p id="result-detail"></p><div class="result-grid"><div><small>FLOORS</small><strong id="final-score">0</strong></div><div><small>BEST STREAK</small><strong id="final-streak">0</strong></div><div><small>BEST SCORE</small><strong id="final-best">0</strong></div></div><button id="again" class="primary">Play again <span>↗</span></button><button class="text-button menu-return">Change mode</button></div></section>
+<div id="error" class="modal" hidden><div class="dialog"><h2>Unable to start the game</h2><p>Your browser could not load the 3D renderer. Check your connection and WebGL support, then refresh.</p></div></div><footer><span>BUILT FOR THE CLIMB</span><span>TAKE YOUR TIME. FIND YOUR RHYTHM.</span></footer></main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r83/three.min.js"></script><script src="game-logic.js"></script><script src="script.js"></script></body></html>
